@@ -1,0 +1,2248 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+  <meta name="theme-color" content="#3d195b"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Premier"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <title>Premier Picks</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚽</text></svg>"/>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;background:#0a0a0f;color:#e2e8f0;-webkit-tap-highlight-color:transparent;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,"Courier New",monospace}
+    #root{min-height:100vh}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}
+    input,button,select,textarea{font-family:inherit;-webkit-appearance:none;outline:none}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+    @keyframes glow{0%,100%{box-shadow:0 0 8px rgba(0,255,135,.3)}50%{box-shadow:0 0 24px rgba(0,255,135,.65)}}
+    @keyframes pop{0%{transform:scale(.95);opacity:0}100%{transform:scale(1);opacity:1}}
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,255,135,0.2);border-top-color:#00ff87;border-radius:50%;animation:spin 0.8s linear infinite}
+    details summary{list-style:none;cursor:pointer}
+    details summary::-webkit-details-marker{display:none}
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0a0a0f;gap:16px">
+      <div style="font-size:48px;animation:pulse 1.4s ease-in-out infinite">⚽</div>
+      <div style="font-family:monospace;color:#00ff87;font-size:16px;font-weight:700;letter-spacing:0.1em">PREMIER PICKS</div>
+      <div style="width:40px;height:40px;border:3px solid rgba(0,255,135,0.2);border-top-color:#00ff87;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+      <div style="color:#475569;font-size:12px">A carregar...</div>
+    </div>
+  </div>
+  <script>"use strict";
+
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+const e = React.createElement;
+
+// =============================================================
+// THEME — cores Premier League (roxo + verde signature)
+// =============================================================
+const T = {
+  bg: '#0a0a0f',
+  bgPanel: '#13131a',
+  bgPanelLight: '#1c1c26',
+  border: '#27272f',
+  borderLight: '#3a3a44',
+  textPrimary: '#f1f5f9',
+  textSecondary: '#94a3b8',
+  textMuted: '#64748b',
+  textDim: '#475569',
+  // Premier League signature colors
+  primary: '#00ff87',      // Premier verde
+  primaryLight: '#37ffa1',
+  primaryGlow: 'rgba(0,255,135,0.5)',
+  secondary: '#3d195b',    // Premier roxo
+  secondaryLight: '#5a2a82',
+  accent: '#3b82f6',
+  win: '#22c55e',
+  loss: '#ef4444',
+  warn: '#f59e0b',
+  draw: '#94a3b8',
+};
+
+// =============================================================
+// COMPETIÇÃO — apenas Premier League
+// =============================================================
+const COMP = {
+  code: 'PL',           // football-data.org code
+  name: 'Premier League',
+  homeAdvantage: 0.30,  // golos
+  overLine: 2.5,        // total goals threshold
+};
+
+// =============================================================
+// LOCAL STORAGE
+// =============================================================
+const LS = {
+  get(key, fb = null) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+  set(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); return true; } catch { return false; } },
+  del(key) { try { localStorage.removeItem(key); } catch {} }
+};
+
+const KEYS_LS = 'premier_keys';
+const PICKS_LS = 'premier_picks';
+
+function loadKeys() { return LS.get(KEYS_LS, {}); }
+function saveKeys(k) { return LS.set(KEYS_LS, k); }
+function loadPicks() { return LS.get(PICKS_LS, []); }
+function savePicks(p) { return LS.set(PICKS_LS, p); }
+
+let KEYS = loadKeys();
+function refreshKeys() { KEYS = loadKeys(); return KEYS; }
+
+// =============================================================
+// HELPERS
+// =============================================================
+const fmt = {
+  pct: (n, d = 0) => n == null || isNaN(n) ? "—" : `${(n * 100).toFixed(d)}%`,
+  num: (n, d = 2) => n == null || isNaN(n) ? "—" : Number(n).toFixed(d),
+  date: s => { try { return new Date(s).toLocaleDateString('pt-PT'); } catch { return s || '—'; } },
+  time: s => { try { return new Date(s).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } },
+  shortDate: s => { try { const d = new Date(s); return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}`; } catch { return s; } },
+  dateTime: s => { try { const d = new Date(s); return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`; } catch { return s; } },
+  dayLabel: s => {
+    try {
+      const d = new Date(s);
+      const today = new Date();
+      const tomorrow = new Date(today.getTime() + 86400000);
+      const fmt = (x) => `${x.getFullYear()}-${(x.getMonth()+1).toString().padStart(2,'0')}-${x.getDate().toString().padStart(2,'0')}`;
+      if (fmt(d) === fmt(today)) return 'HOJE';
+      if (fmt(d) === fmt(tomorrow)) return 'AMANHÃ';
+      const days = ['DOM','SEG','TER','QUA','QUI','SEX','SÁB'];
+      return `${days[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
+    } catch { return ''; }
+  }
+};
+
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function dateOffsetISO(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+
+// =============================================================
+// MODELO POISSON BIVARIADO
+// =============================================================
+function poissonLambdas({ homeAvgFor, homeAvgAgainst, awayAvgFor, awayAvgAgainst, leagueAvgGoals, homeAdv = 0.30 }) {
+  const homeAttack = homeAvgFor / leagueAvgGoals;
+  const homeDef = homeAvgAgainst / leagueAvgGoals;
+  const awayAttack = awayAvgFor / leagueAvgGoals;
+  const awayDef = awayAvgAgainst / leagueAvgGoals;
+  const lambdaHome = homeAttack * awayDef * leagueAvgGoals + homeAdv;
+  const lambdaAway = awayAttack * homeDef * leagueAvgGoals;
+  return {
+    lambdaHome: Math.max(0.1, lambdaHome),
+    lambdaAway: Math.max(0.1, lambdaAway)
+  };
+}
+
+function poissonPMF(lambda, k) {
+  if (k < 0) return 0;
+  let log = -lambda + k * Math.log(lambda);
+  for (let i = 1; i <= k; i++) log -= Math.log(i);
+  return Math.exp(log);
+}
+
+function footballOutcomeProbs(lambdaHome, lambdaAway, maxGoals = 8, overLine = 2.5) {
+  let pHome = 0, pDraw = 0, pAway = 0, pOver = 0, pUnder = 0;
+  const matrix = [];
+  for (let h = 0; h <= maxGoals; h++) {
+    const row = [];
+    for (let a = 0; a <= maxGoals; a++) {
+      const p = poissonPMF(lambdaHome, h) * poissonPMF(lambdaAway, a);
+      row.push(p);
+      if (h > a) pHome += p;
+      else if (h === a) pDraw += p;
+      else pAway += p;
+      const total = h + a;
+      if (total > overLine) pOver += p;
+      else pUnder += p;
+    }
+    matrix.push(row);
+  }
+  const total = pHome + pDraw + pAway;
+  return {
+    pHome: pHome / total,
+    pDraw: pDraw / total,
+    pAway: pAway / total,
+    pOver: pOver / (pOver + pUnder),
+    pUnder: pUnder / (pOver + pUnder),
+    matrix,
+    expectedGoals: lambdaHome + lambdaAway,
+    lambdaHome, lambdaAway
+  };
+}
+
+// Top 3 most likely scores
+function topScores(matrix, n = 3) {
+  const flat = [];
+  for (let h = 0; h < matrix.length; h++) {
+    for (let a = 0; a < matrix[h].length; a++) {
+      flat.push({ home: h, away: a, prob: matrix[h][a] });
+    }
+  }
+  return flat.sort((a, b) => b.prob - a.prob).slice(0, n);
+}
+
+// =============================================================
+// CORS PROXIES
+// =============================================================
+const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+
+async function fetchViaCORSProxy(url, timeoutMs = 8000) {
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      const r = await fetch(proxy(url), { signal: ctrl.signal });
+      clearTimeout(t);
+      if (r.ok) return await r.text();
+    } catch {}
+  }
+  throw new Error("Todos os proxies CORS falharam");
+}
+
+// =============================================================
+// FOOTBALL-DATA.ORG API — Premier League
+// =============================================================
+const FD_BASE = 'https://api.football-data.org/v4';
+
+async function fdRequest(path) {
+  refreshKeys();
+  if (!KEYS.footballdata) throw new Error("FOOTBALL_DATA_KEY não configurada (vai a ⚙)");
+  const r = await fetch(`${FD_BASE}${path}`, {
+    headers: { 'X-Auth-Token': KEYS.footballdata }
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`football-data ${r.status}: ${t.slice(0, 150)}`);
+  }
+  return r.json();
+}
+
+async function fdStandings() {
+  const data = await fdRequest(`/competitions/PL/standings`);
+  const standings = (data.standings || []).find(s => s.type === 'TOTAL');
+  return (standings?.table || []).map(t => ({
+    position: t.position,
+    team: t.team.name,
+    teamId: t.team.id,
+    teamShort: t.team.shortName || t.team.name,
+    teamTla: t.team.tla,
+    crest: t.team.crest,
+    played: t.playedGames,
+    won: t.won,
+    draw: t.draw,
+    lost: t.lost,
+    points: t.points,
+    goalsFor: t.goalsFor,
+    goalsAgainst: t.goalsAgainst,
+    goalDifference: t.goalDifference,
+    avgFor: t.playedGames > 0 ? t.goalsFor / t.playedGames : 0,
+    avgAgainst: t.playedGames > 0 ? t.goalsAgainst / t.playedGames : 0,
+    form: t.form || ''
+  }));
+}
+
+async function fdMatches(dateFrom, dateTo) {
+  const params = new URLSearchParams({ dateFrom, dateTo, status: 'SCHEDULED,TIMED' });
+  const data = await fdRequest(`/competitions/PL/matches?${params}`);
+  return (data.matches || []).map(m => ({
+    id: m.id,
+    utcDate: m.utcDate,
+    status: m.status,
+    matchday: m.matchday,
+    homeTeam: m.homeTeam.name,
+    homeTeamShort: m.homeTeam.shortName || m.homeTeam.name,
+    homeId: m.homeTeam.id,
+    homeCrest: m.homeTeam.crest,
+    homeTla: m.homeTeam.tla,
+    awayTeam: m.awayTeam.name,
+    awayTeamShort: m.awayTeam.shortName || m.awayTeam.name,
+    awayId: m.awayTeam.id,
+    awayCrest: m.awayTeam.crest,
+    awayTla: m.awayTeam.tla,
+  }));
+}
+
+async function fdTeamRecent(teamId, limit = 5) {
+  const data = await fdRequest(`/teams/${teamId}/matches?limit=${limit}&status=FINISHED`);
+  return (data.matches || []).map(m => {
+    const score = m.score?.fullTime || {};
+    return {
+      utcDate: m.utcDate,
+      homeTeam: m.homeTeam.name,
+      awayTeam: m.awayTeam.name,
+      homeId: m.homeTeam.id,
+      awayId: m.awayTeam.id,
+      homeScore: score.home,
+      awayScore: score.away,
+      isHome: m.homeTeam.id === teamId,
+      myScore: m.homeTeam.id === teamId ? score.home : score.away,
+      oppScore: m.homeTeam.id === teamId ? score.away : score.home,
+      opponent: m.homeTeam.id === teamId ? m.awayTeam.shortName || m.awayTeam.name : m.homeTeam.shortName || m.homeTeam.name,
+      result: score.home == null ? '?' : (
+        m.homeTeam.id === teamId
+          ? (score.home > score.away ? 'W' : score.home < score.away ? 'L' : 'D')
+          : (score.away > score.home ? 'W' : score.away < score.home ? 'L' : 'D')
+      ),
+      competition: m.competition?.name || ''
+    };
+  });
+}
+
+async function fdHeadToHead(matchId, limit = 5) {
+  try {
+    const data = await fdRequest(`/matches/${matchId}/head2head?limit=${limit}`);
+    return (data.matches || []).map(m => ({
+      utcDate: m.utcDate,
+      homeTeam: m.homeTeam.shortName || m.homeTeam.name,
+      awayTeam: m.awayTeam.shortName || m.awayTeam.name,
+      homeScore: m.score?.fullTime?.home,
+      awayScore: m.score?.fullTime?.away,
+      competition: m.competition?.name || '',
+    }));
+  } catch { return []; }
+}
+
+// Busca um jogo específico por ID (para tracking de resultado)
+async function fdMatchById(matchId) {
+  try {
+    const data = await fdRequest(`/matches/${matchId}`);
+    const m = data;
+    const score = m.score?.fullTime || {};
+    return {
+      id: m.id,
+      utcDate: m.utcDate,
+      status: m.status,
+      homeScore: score.home,
+      awayScore: score.away,
+      finished: m.status === 'FINISHED',
+    };
+  } catch (err) {
+    return { id: matchId, error: err.message };
+  }
+}
+
+// Busca jogos finalizados num intervalo de datas (mais eficiente que 1-by-1)
+async function fdFinishedMatches(dateFrom, dateTo) {
+  const params = new URLSearchParams({ dateFrom, dateTo, status: 'FINISHED' });
+  const data = await fdRequest(`/competitions/PL/matches?${params}`);
+  return (data.matches || []).map(m => ({
+    id: m.id,
+    utcDate: m.utcDate,
+    homeId: m.homeTeam.id,
+    awayId: m.awayTeam.id,
+    homeScore: m.score?.fullTime?.home,
+    awayScore: m.score?.fullTime?.away,
+    status: m.status,
+  }));
+}
+
+
+// =============================================================
+// RSS NEWS — múltiplas fontes Premier League
+// =============================================================
+const NEWS_FEEDS = [
+  { name: "BBC Football", url: "https://feeds.bbci.co.uk/sport/football/rss.xml", color: "#bb1919" },
+  { name: "Sky Sports PL", url: "https://www.skysports.com/rss/12040", color: "#0066cc" },
+  { name: "ESPN Soccer", url: "https://www.espn.com/espn/rss/soccer/news", color: "#dc2626" },
+  { name: "Goal.com", url: "https://www.goal.com/feeds/en/news", color: "#ec1b24" },
+  { name: "90min", url: "https://www.90min.com/posts.rss", color: "#fc4c02" },
+  { name: "FootballFanCast", url: "https://footballfancast.com/feed", color: "#00a86b" },
+];
+
+function parseRSS(xml) {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, "text/xml");
+    const items = Array.from(doc.querySelectorAll("item")).slice(0, 25);
+    return items.map(item => {
+      const get = sel => {
+        const el = item.querySelector(sel);
+        return el ? el.textContent.trim() : "";
+      };
+      const desc = get("description").replace(/<[^>]+>/g, "").slice(0, 280);
+      return {
+        title: get("title"),
+        description: desc,
+        link: get("link"),
+        pubDate: get("pubDate"),
+        ts: new Date(get("pubDate") || Date.now()).getTime()
+      };
+    });
+  } catch { return []; }
+}
+
+async function fetchAllNews() {
+  const all = [];
+  // Fetch em paralelo (mais rápido)
+  await Promise.all(NEWS_FEEDS.map(async feed => {
+    try {
+      const xml = await fetchViaCORSProxy(feed.url);
+      const items = parseRSS(xml);
+      items.forEach(item => all.push({ ...item, source: feed.name, sourceColor: feed.color }));
+    } catch (err) {
+      console.warn(`[news] ${feed.name}:`, err.message);
+    }
+  }));
+  return all.sort((a, b) => b.ts - a.ts).slice(0, 50);
+}
+
+// Filtra notícias relevantes para 2 equipas
+function filterNewsForGame(news, homeTeam, awayTeam, homeShort, awayShort) {
+  if (!news || !news.length) return [];
+
+  const buildKw = (full, short) => {
+    const set = new Set();
+    [full, short].filter(Boolean).forEach(name => {
+      const lower = name.toLowerCase();
+      set.add(lower);
+      // Última palavra (Liverpool, Chelsea, City, United, etc) — mas só se >= 4 chars
+      const parts = lower.split(/\s+/).filter(w => w.length >= 4);
+      parts.forEach(p => set.add(p));
+    });
+    return [...set];
+  };
+
+  const homeKw = buildKw(homeTeam, homeShort);
+  const awayKw = buildKw(awayTeam, awayShort);
+
+  return news.filter(n => {
+    const text = `${n.title} ${n.description}`.toLowerCase();
+    return homeKw.some(k => text.includes(k)) || awayKw.some(k => text.includes(k));
+  });
+}
+
+// =============================================================
+// CLAUDE API
+// =============================================================
+const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+
+const SYSTEM_PROMPT = `És um analista de futebol especializado em Premier League. Recebes:
+- Probabilidades calculadas por modelo Poisson (golos esperados, P de vitória/empate/derrota, P de over 2.5)
+- Classificação atual das duas equipas
+- Forma recente (últimos 5 jogos cada)
+- Head-to-head últimos confrontos
+- Notícias relevantes (lesões, suspensões, contexto recente)
+
+A tua função é dar UM PICK FINAL com confiança calibrada, ajustando o modelo com contexto qualitativo.
+
+PRINCÍPIOS DE AJUSTE:
+- Lesões de jogadores-chave → reduz prob da equipa afetada
+- Forma quente (4+ vitórias seguidas) → +5-10% confiança
+- Forma fria (4+ jogos sem ganhar) → -5-10% confiança
+- Equipa em crise / treinador despedido → red flag, reduz confiança
+- Derby/clássico → maior imprevisibilidade, baixa confiança
+- Equipa lutando relegação em casa contra top-6 → frequentemente empate
+- Top-6 em casa contra bottom-6 → over 2.5 mais provável
+- Se confiança final < 55%, marca como "TOSS-UP"
+- Em caso de dúvida entre vitória clara e empate, considera o draw mais seriamente do que o modelo
+
+NÃO recomendas apostas. Só dás opinião sobre quem vai ganhar e quantos golos.
+
+OUTPUT — APENAS JSON, SEM MARKDOWN:
+{
+  "winner_pick": "HOME" | "AWAY" | "DRAW" | "TOSS_UP",
+  "winner_confidence": <number 0-1>,
+  "total_pick": "OVER" | "UNDER" | "TOSS_UP",
+  "total_confidence": <number 0-1>,
+  "predicted_score": "<X-Y>",
+  "key_factors": [<string>],
+  "concerns": [<string>],
+  "reasoning": "<2-3 frases explicando o pick>"
+}`;
+
+function safeParseJSON(text) {
+  const cleaned = text.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("JSON não encontrado");
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+async function callClaude(systemPrompt, userMsg, maxTokens = 1500) {
+  refreshKeys();
+  if (!KEYS.anthropic) throw new Error("ANTHROPIC_API_KEY não configurada (vai a ⚙)");
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": KEYS.anthropic,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMsg }]
+    })
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Claude ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+  return safeParseJSON(text);
+}
+
+async function getAIPick({ gameInfo, modelProbs, standings, recentForm, h2h, news }) {
+  const userMsg = `JOGO: ${gameInfo.homeTeam} (CASA) vs ${gameInfo.awayTeam} (FORA)
+DATA: ${fmt.dateTime(gameInfo.utcDate)}
+JORNADA: ${gameInfo.matchday || '?'}
+
+═══ MODELO POISSON ═══
+Golos esperados: ${gameInfo.homeTeamShort || gameInfo.homeTeam} ${modelProbs.lambdaHome.toFixed(2)} - ${modelProbs.lambdaAway.toFixed(2)} ${gameInfo.awayTeamShort || gameInfo.awayTeam}
+P(vitória ${gameInfo.homeTeamShort || gameInfo.homeTeam}): ${(modelProbs.pHome * 100).toFixed(1)}%
+P(empate): ${(modelProbs.pDraw * 100).toFixed(1)}%
+P(vitória ${gameInfo.awayTeamShort || gameInfo.awayTeam}): ${(modelProbs.pAway * 100).toFixed(1)}%
+P(over 2.5 golos): ${(modelProbs.pOver * 100).toFixed(1)}%
+P(under 2.5 golos): ${(modelProbs.pUnder * 100).toFixed(1)}%
+
+═══ CLASSIFICAÇÃO ═══
+${standings.home ? `${gameInfo.homeTeamShort || gameInfo.homeTeam}: ${standings.home.position}º (${standings.home.points}pts) — ${standings.home.won}V ${standings.home.draw}E ${standings.home.lost}D, ${standings.home.goalsFor}GM ${standings.home.goalsAgainst}GS, forma: ${standings.home.form}` : 'n/a'}
+${standings.away ? `${gameInfo.awayTeamShort || gameInfo.awayTeam}: ${standings.away.position}º (${standings.away.points}pts) — ${standings.away.won}V ${standings.away.draw}E ${standings.away.lost}D, ${standings.away.goalsFor}GM ${standings.away.goalsAgainst}GS, forma: ${standings.away.form}` : 'n/a'}
+
+═══ FORMA RECENTE (últimos 5 jogos) ═══
+${gameInfo.homeTeamShort || gameInfo.homeTeam}:
+${recentForm.home.length ? recentForm.home.slice(0, 5).map(g => `  ${g.result} ${g.isHome ? 'vs' : '@'} ${g.opponent} ${g.myScore}-${g.oppScore}`).join('\n') : '  sem dados'}
+
+${gameInfo.awayTeamShort || gameInfo.awayTeam}:
+${recentForm.away.length ? recentForm.away.slice(0, 5).map(g => `  ${g.result} ${g.isHome ? 'vs' : '@'} ${g.opponent} ${g.myScore}-${g.oppScore}`).join('\n') : '  sem dados'}
+
+═══ HEAD-TO-HEAD (últimos 5) ═══
+${h2h.length ? h2h.slice(0, 5).map(m => `  ${m.homeTeam} ${m.homeScore != null ? m.homeScore : '?'}-${m.awayScore != null ? m.awayScore : '?'} ${m.awayTeam}`).join('\n') : '  sem dados'}
+
+═══ NOTÍCIAS RECENTES (${news.length} relevantes) ═══
+${news.length ? news.slice(0, 10).map((n, i) => `${i+1}. [${n.source}] ${n.title}\n   ${n.description}`).join('\n\n') : '  sem notícias específicas filtradas para estas equipas'}
+
+═══ TUA TAREFA ═══
+Devolve picks (vencedor + over/under 2.5 golos) com confidence calibrada e raciocínio.
+Considera o contexto qualitativo das notícias (especialmente lesões e suspensões) para ajustar as probabilidades base.
+Sê honesto: se há muita incerteza, marca TOSS-UP.`;
+
+  return await callClaude(SYSTEM_PROMPT, userMsg, 1500);
+}
+
+
+// =============================================================
+// COMPONENTES UI BÁSICOS
+// =============================================================
+function Card({ children, accent, padding = 16, glow, style: extra, onClick }) {
+  return e('div', {
+    onClick,
+    style: {
+      background: T.bgPanel,
+      border: `1px solid ${accent || T.border}`,
+      borderRadius: 8,
+      padding,
+      cursor: onClick ? 'pointer' : 'default',
+      boxShadow: glow ? `0 0 0 1px ${T.primary}30, 0 0 24px ${T.primary}15` : 'none',
+      transition: 'all .2s',
+      ...extra
+    }
+  }, children);
+}
+
+function Button({ children, onClick, variant = 'primary', size = 'md', disabled, full, style: extra }) {
+  const sizes = {
+    sm: { padding: '6px 10px', fontSize: 10 },
+    md: { padding: '10px 16px', fontSize: 11 },
+    lg: { padding: '14px 22px', fontSize: 13 }
+  };
+  const variants = {
+    primary: { background: disabled ? T.border : T.primary, color: '#000', border: 'none' },
+    secondary: { background: T.secondary, color: '#fff', border: 'none' },
+    ghost: { background: 'transparent', color: T.textSecondary, border: `1px solid ${T.border}` },
+    accent: { background: T.accent, color: '#fff', border: 'none' },
+  };
+  return e('button', {
+    onClick, disabled,
+    style: {
+      ...variants[variant], ...sizes[size],
+      letterSpacing: '0.15em', fontWeight: 700,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.4 : 1,
+      borderRadius: 4, transition: 'all .15s',
+      width: full ? '100%' : 'auto',
+      ...extra
+    }
+  }, children);
+}
+
+function Badge({ children, color = 'gray', size = 'md' }) {
+  const c = {
+    gray: { bg: T.bgPanelLight, fg: T.textSecondary, bd: T.border },
+    primary: { bg: 'rgba(0,255,135,0.12)', fg: T.primary, bd: T.primary + '60' },
+    secondary: { bg: 'rgba(61,25,91,0.4)', fg: '#c084fc', bd: T.secondary + '90' },
+    win: { bg: 'rgba(34,197,94,0.12)', fg: T.win, bd: T.win + '50' },
+    loss: { bg: 'rgba(239,68,68,0.12)', fg: T.loss, bd: T.loss + '50' },
+    warn: { bg: 'rgba(245,158,11,0.12)', fg: T.warn, bd: T.warn + '50' },
+    draw: { bg: 'rgba(148,163,184,0.12)', fg: T.draw, bd: T.draw + '50' },
+  }[color];
+  const s = size === 'sm' ? { padding: '2px 6px', fontSize: 8 } : { padding: '3px 8px', fontSize: 9 };
+  return e('span', {
+    style: {
+      display: 'inline-block', ...s,
+      letterSpacing: '0.12em', fontWeight: 700,
+      background: c.bg, color: c.fg,
+      border: `1px solid ${c.bd}`, borderRadius: 3
+    }
+  }, children);
+}
+
+function FormBadge({ result }) {
+  const colors = {
+    W: { bg: T.win, fg: '#000' },
+    L: { bg: T.loss, fg: '#fff' },
+    D: { bg: T.warn, fg: '#000' },
+    '?': { bg: T.border, fg: T.textMuted },
+  };
+  const c = colors[result] || colors['?'];
+  return e('span', {
+    style: {
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: 18, height: 18,
+      background: c.bg, color: c.fg,
+      fontSize: 10, fontWeight: 800, borderRadius: 3
+    }
+  }, result);
+}
+
+function ConfidenceBar({ value, color }) {
+  const pct = Math.max(0, Math.min(1, value || 0));
+  const c = color || (pct >= 0.65 ? T.win : pct >= 0.55 ? T.warn : T.textMuted);
+  return e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+    e('div', { style: { flex: 1, height: 6, background: T.bg, borderRadius: 3, overflow: 'hidden' } },
+      e('div', { style: { width: `${pct * 100}%`, height: '100%', background: c, transition: 'width .4s ease' } })
+    ),
+    e('span', { style: { fontSize: 11, fontWeight: 700, color: c, minWidth: 36, textAlign: 'right' } }, fmt.pct(pct, 0))
+  );
+}
+
+function SectionLabel({ children, color }) {
+  const c = color === 'primary' ? T.primary : color === 'secondary' ? T.secondaryLight : color === 'warn' ? T.warn : T.textSecondary;
+  return e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
+    e('div', { style: { width: 3, height: 14, background: c } }),
+    e('div', { style: { fontSize: 10, letterSpacing: '0.25em', color: T.textPrimary, fontWeight: 700 } }, children)
+  );
+}
+
+// =============================================================
+// GRÁFICOS SVG — sem dependências
+// =============================================================
+
+// Linha temporal: rolling accuracy ao longo dos jogos
+function AccuracyTimeline({ picks, type = 'winner' }) {
+  // type: 'winner' ou 'total'
+  const settled = picks
+    .filter(p => p.result !== 'pending')
+    .filter(p => type === 'winner' ? p.winnerCorrect != null : p.totalCorrect != null)
+    .sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
+
+  if (settled.length < 2) {
+    return e('div', { style: { padding: 30, textAlign: 'center', color: T.textMuted, fontSize: 11 } },
+      `Precisa de pelo menos 2 jogos resolvidos para mostrar evolução (tens ${settled.length})`
+    );
+  }
+
+  // Calcular accuracy cumulativa (acertos até agora / total até agora)
+  let correct = 0;
+  const points = settled.map((p, i) => {
+    const isCorrect = type === 'winner' ? p.winnerCorrect : p.totalCorrect;
+    if (isCorrect) correct++;
+    return {
+      i: i + 1,
+      acc: correct / (i + 1),
+      date: p.utcDate,
+      gameLabel: `${p.homeTeamShort || p.homeTeam} vs ${p.awayTeamShort || p.awayTeam}`,
+      hit: isCorrect
+    };
+  });
+
+  // Layout
+  const W = 600, H = 200;
+  const padL = 40, padR = 20, padT = 20, padB = 30;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const xScale = (i) => padL + ((i - 1) / Math.max(1, points.length - 1)) * innerW;
+  const yScale = (acc) => padT + (1 - acc) * innerH;
+
+  // Path da linha
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(p.i).toFixed(1)},${yScale(p.acc).toFixed(1)}`).join(' ');
+
+  // Linhas horizontais de referência
+  const yRefs = [0.25, 0.5, 0.75, 1];
+
+  // Cor da linha consoante accuracy final
+  const finalAcc = points[points.length - 1].acc;
+  const lineColor = finalAcc >= 0.55 ? T.win : finalAcc >= 0.45 ? T.warn : T.loss;
+
+  return e('div', { style: { width: '100%', overflowX: 'auto' } },
+    e('svg', {
+      viewBox: `0 0 ${W} ${H}`,
+      style: { width: '100%', minWidth: 400, height: 'auto', display: 'block' }
+    },
+      // Linha 50% (barreira de aleatório)
+      e('line', {
+        x1: padL, y1: yScale(0.5),
+        x2: W - padR, y2: yScale(0.5),
+        stroke: T.warn, strokeWidth: 1, strokeDasharray: '4,4', opacity: 0.5
+      }),
+      e('text', {
+        x: W - padR - 4, y: yScale(0.5) - 4,
+        fill: T.warn, fontSize: 8, textAnchor: 'end', opacity: 0.8
+      }, '50% (aleatório)'),
+
+      // Eixos Y (labels)
+      ...yRefs.map(y => e('g', { key: y },
+        e('line', {
+          x1: padL, y1: yScale(y), x2: W - padR, y2: yScale(y),
+          stroke: T.border, strokeWidth: 0.5, opacity: 0.4
+        }),
+        e('text', {
+          x: padL - 6, y: yScale(y) + 3,
+          fill: T.textMuted, fontSize: 9, textAnchor: 'end', fontFamily: 'monospace'
+        }, `${(y * 100).toFixed(0)}%`)
+      )),
+
+      // Eixo X label
+      e('text', {
+        x: padL, y: H - 8,
+        fill: T.textMuted, fontSize: 9, fontFamily: 'monospace'
+      }, '1'),
+      e('text', {
+        x: W - padR, y: H - 8,
+        fill: T.textMuted, fontSize: 9, textAnchor: 'end', fontFamily: 'monospace'
+      }, `${points.length}`),
+      e('text', {
+        x: W / 2, y: H - 8,
+        fill: T.textDim, fontSize: 9, textAnchor: 'middle', letterSpacing: '0.15em'
+      }, 'JOGOS →'),
+
+      // Área sob a linha
+      e('path', {
+        d: `${linePath} L${xScale(points[points.length-1].i).toFixed(1)},${yScale(0).toFixed(1)} L${padL},${yScale(0).toFixed(1)} Z`,
+        fill: lineColor,
+        opacity: 0.1
+      }),
+
+      // Linha
+      e('path', {
+        d: linePath,
+        fill: 'none',
+        stroke: lineColor,
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round'
+      }),
+
+      // Pontos
+      ...points.map((p, i) => e('circle', {
+        key: i,
+        cx: xScale(p.i),
+        cy: yScale(p.acc),
+        r: 3,
+        fill: p.hit ? T.win : T.loss,
+        stroke: T.bg,
+        strokeWidth: 1
+      })),
+
+      // Último ponto destacado
+      e('circle', {
+        cx: xScale(points[points.length - 1].i),
+        cy: yScale(points[points.length - 1].acc),
+        r: 5,
+        fill: lineColor,
+        stroke: T.bgPanel,
+        strokeWidth: 2
+      }),
+      e('text', {
+        x: xScale(points[points.length - 1].i) - 8,
+        y: yScale(points[points.length - 1].acc) - 10,
+        fill: lineColor, fontSize: 11, fontWeight: 700, textAnchor: 'end', fontFamily: 'monospace'
+      }, fmt.pct(points[points.length - 1].acc))
+    )
+  );
+}
+
+// Barras horizontais por nível de confiança
+function ConfidenceBars({ byConfidence }) {
+  const data = [
+    { key: 'high', label: 'ALTA (≥65%)', color: T.win, c: byConfidence.high.c, t: byConfidence.high.t },
+    { key: 'mid', label: 'MÉDIA (55-65%)', color: T.warn, c: byConfidence.mid.c, t: byConfidence.mid.t },
+    { key: 'low', label: 'BAIXA (<55%)', color: T.textMuted, c: byConfidence.low.c, t: byConfidence.low.t },
+  ];
+
+  if (data.every(d => d.t === 0)) {
+    return e('div', { style: { padding: 20, textAlign: 'center', color: T.textMuted, fontSize: 11 } }, 'Sem dados ainda');
+  }
+
+  return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' } },
+    ...data.map(d => {
+      const acc = d.t > 0 ? d.c / d.t : 0;
+      return e('div', { key: d.key, style: { display: 'flex', alignItems: 'center', gap: 12 } },
+        e('div', { style: { fontSize: 10, color: T.textSecondary, letterSpacing: '0.1em', fontWeight: 700, width: 110, flexShrink: 0 } }, d.label),
+        e('div', { style: { flex: 1, position: 'relative', height: 22, background: T.bg, borderRadius: 4, overflow: 'hidden' } },
+          // Barra de fundo (50% ref)
+          e('div', { style: { position: 'absolute', top: 0, left: '50%', width: 1, height: '100%', background: T.warn + '50' } }),
+          // Barra de accuracy
+          e('div', {
+            style: {
+              width: d.t > 0 ? `${acc * 100}%` : '0%',
+              height: '100%',
+              background: d.t === 0 ? T.border : (acc >= 0.55 ? T.win : acc >= 0.45 ? T.warn : T.loss),
+              transition: 'width .6s ease',
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+              paddingRight: 8
+            }
+          },
+            d.t > 0 && acc > 0.15 && e('span', { style: { fontSize: 10, color: '#000', fontWeight: 800 } }, fmt.pct(acc))
+          ),
+          // Label fora se accuracy baixa
+          d.t > 0 && acc <= 0.15 && e('span', {
+            style: { position: 'absolute', left: `${acc * 100 + 1}%`, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: T.textPrimary, fontWeight: 700 }
+          }, fmt.pct(acc))
+        ),
+        e('div', { style: { fontSize: 10, color: T.textMuted, fontFamily: 'monospace', width: 50, textAlign: 'right', flexShrink: 0 } }, `${d.c}/${d.t}`)
+      );
+    })
+  );
+}
+
+// Donut chart de distribuição
+function DistributionDonut({ counts }) {
+  // counts: { correct, partial, wrong, tossup, pending }
+  const total = (counts.correct || 0) + (counts.partial || 0) + (counts.wrong || 0) + (counts.tossup || 0) + (counts.pending || 0);
+  if (total === 0) {
+    return e('div', { style: { padding: 20, textAlign: 'center', color: T.textMuted, fontSize: 11 } }, 'Sem dados');
+  }
+
+  const segments = [
+    { key: 'correct', label: 'Acertos', value: counts.correct || 0, color: T.win },
+    { key: 'partial', label: 'Parciais', value: counts.partial || 0, color: T.warn },
+    { key: 'wrong', label: 'Falhas', value: counts.wrong || 0, color: T.loss },
+    { key: 'tossup', label: 'Toss-ups', value: counts.tossup || 0, color: T.textMuted },
+    { key: 'pending', label: 'Pendentes', value: counts.pending || 0, color: T.border },
+  ].filter(s => s.value > 0);
+
+  // SVG donut
+  const size = 140;
+  const cx = size / 2, cy = size / 2;
+  const r = 50, innerR = 32;
+
+  let cumAngle = -Math.PI / 2; // começar no topo
+  const arcs = segments.map(s => {
+    const angle = (s.value / total) * Math.PI * 2;
+    const startAngle = cumAngle;
+    const endAngle = cumAngle + angle;
+    cumAngle = endAngle;
+
+    const largeArc = angle > Math.PI ? 1 : 0;
+    const x1 = cx + r * Math.cos(startAngle);
+    const y1 = cy + r * Math.sin(startAngle);
+    const x2 = cx + r * Math.cos(endAngle);
+    const y2 = cy + r * Math.sin(endAngle);
+    const xi1 = cx + innerR * Math.cos(endAngle);
+    const yi1 = cy + innerR * Math.sin(endAngle);
+    const xi2 = cx + innerR * Math.cos(startAngle);
+    const yi2 = cy + innerR * Math.sin(startAngle);
+
+    const path = `M${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} L${xi1},${yi1} A${innerR},${innerR} 0 ${largeArc} 0 ${xi2},${yi2} Z`;
+    return { ...s, path };
+  });
+
+  const accSettled = (counts.correct || 0) + (counts.partial || 0) + (counts.wrong || 0);
+  const correctPct = accSettled > 0 ? ((counts.correct || 0) / accSettled) : 0;
+
+  return e('div', { style: { display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', padding: '8px 0' } },
+    // SVG donut
+    e('div', { style: { position: 'relative', flexShrink: 0 } },
+      e('svg', { viewBox: `0 0 ${size} ${size}`, style: { width: size, height: size } },
+        ...arcs.map((a, i) => e('path', {
+          key: i,
+          d: a.path,
+          fill: a.color,
+          stroke: T.bgPanel,
+          strokeWidth: 1
+        }))
+      ),
+      // Center text
+      e('div', {
+        style: {
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none'
+        }
+      },
+        e('div', { style: { fontSize: 22, fontWeight: 800, color: T.textPrimary, lineHeight: 1 } }, total),
+        e('div', { style: { fontSize: 8, color: T.textMuted, letterSpacing: '0.15em', marginTop: 4 } }, 'TOTAL')
+      )
+    ),
+    // Legenda
+    e('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 160 } },
+      ...segments.map(s => e('div', { key: s.key, style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 } },
+        e('div', { style: { width: 12, height: 12, background: s.color, borderRadius: 2, flexShrink: 0 } }),
+        e('span', { style: { color: T.textSecondary, flex: 1 } }, s.label),
+        e('span', { style: { color: T.textPrimary, fontWeight: 700, fontFamily: 'monospace' } }, s.value),
+        e('span', { style: { color: T.textMuted, fontSize: 9, fontFamily: 'monospace' } }, `${((s.value / total) * 100).toFixed(0)}%`)
+      ))
+    )
+  );
+}
+
+
+// =============================================================
+// GAME CARD — display + análise expandida
+// =============================================================
+function GameCard({ game, allNews, standings, leagueAvgGoals, onAnalyzed, savedPick }) {
+  const [analyzing, setAnalyzing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [analysis, setAnalysis] = useState(savedPick?.analysis || null);
+  const [error, setError] = useState(null);
+
+  const homeStanding = useMemo(() =>
+    standings?.find(s => s.teamId === game.homeId), [standings, game]);
+  const awayStanding = useMemo(() =>
+    standings?.find(s => s.teamId === game.awayId), [standings, game]);
+
+  const analyze = async () => {
+    setAnalyzing(true);
+    setError(null);
+    setExpanded(true);
+    try {
+      if (!homeStanding || !awayStanding) {
+        throw new Error("Standings em falta. Recarrega a página.");
+      }
+
+      // 1. Modelo Poisson
+      const lambdas = poissonLambdas({
+        homeAvgFor: homeStanding.avgFor,
+        homeAvgAgainst: homeStanding.avgAgainst,
+        awayAvgFor: awayStanding.avgFor,
+        awayAvgAgainst: awayStanding.avgAgainst,
+        leagueAvgGoals,
+        homeAdv: COMP.homeAdvantage,
+      });
+      const modelProbs = footballOutcomeProbs(lambdas.lambdaHome, lambdas.lambdaAway, 8, COMP.overLine);
+      const topScoresList = topScores(modelProbs.matrix, 3);
+
+      // 2. Carregar contexto em paralelo
+      let recentForm = { home: [], away: [] };
+      let h2h = [];
+      try {
+        [recentForm.home, recentForm.away, h2h] = await Promise.all([
+          fdTeamRecent(game.homeId, 5).catch(() => []),
+          fdTeamRecent(game.awayId, 5).catch(() => []),
+          fdHeadToHead(game.id, 5).catch(() => []),
+        ]);
+      } catch {}
+
+      // 3. Filtrar notícias
+      const relevantNews = filterNewsForGame(
+        allNews, game.homeTeam, game.awayTeam,
+        game.homeTeamShort, game.awayTeamShort
+      ).slice(0, 10);
+
+      // 4. Pedir pick à IA
+      let aiPick = null;
+      if (KEYS.anthropic) {
+        try {
+          aiPick = await getAIPick({
+            gameInfo: game,
+            modelProbs,
+            standings: { home: homeStanding, away: awayStanding },
+            recentForm,
+            h2h,
+            news: relevantNews,
+          });
+        } catch (err) {
+          aiPick = { error: err.message };
+        }
+      }
+
+      const result = {
+        modelProbs,
+        topScores: topScoresList,
+        recentForm,
+        h2h,
+        relevantNews,
+        aiPick,
+        ts: new Date().toISOString(),
+      };
+      setAnalysis(result);
+      onAnalyzed && onAnalyzed(game, result);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const pick = analysis?.aiPick;
+  const hasError = pick?.error;
+  const winnerFromAI = pick?.winner_pick;
+  const winnerLabel = winnerFromAI === 'HOME' ? (game.homeTeamShort || game.homeTeam) :
+    winnerFromAI === 'AWAY' ? (game.awayTeamShort || game.awayTeam) :
+    winnerFromAI === 'DRAW' ? 'EMPATE' :
+    winnerFromAI === 'TOSS_UP' ? 'TOSS-UP' : null;
+  const totalPick = pick?.total_pick;
+
+  return e('div', {
+    style: {
+      background: T.bgPanel,
+      border: `1px solid ${analysis ? T.primary + '60' : T.border}`,
+      borderRadius: 8,
+      overflow: 'hidden',
+      transition: 'all .2s',
+      animation: 'fadeUp .3s ease'
+    }
+  },
+    // Header clicável
+    e('div', {
+      onClick: () => setExpanded(!expanded),
+      style: { padding: 16, cursor: 'pointer', borderBottom: expanded ? `1px solid ${T.border}` : 'none' }
+    },
+      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+        e('div', { style: { fontSize: 9, letterSpacing: '0.2em', color: T.textMuted, fontWeight: 700 } },
+          fmt.dateTime(game.utcDate),
+          game.matchday && e('span', { style: { color: T.secondaryLight, marginLeft: 8 } }, `J${game.matchday}`)
+        ),
+        analysis && e(Badge, { color: 'primary', size: 'sm' }, '✓ ANALISADO')
+      ),
+
+      // Equipas com crests
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 } },
+        e('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: 10 } },
+          game.homeCrest && e('img', { src: game.homeCrest, alt: '', style: { width: 32, height: 32, objectFit: 'contain' }, onError: ev => ev.target.style.display = 'none' }),
+          e('div', null,
+            e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em', marginBottom: 2 } }, '🏠 CASA'),
+            e('div', { style: { fontSize: 14, color: T.textPrimary, fontWeight: 700 } }, game.homeTeamShort || game.homeTeam),
+            homeStanding && e('div', { style: { fontSize: 10, color: T.textDim, marginTop: 2 } }, `${homeStanding.position}º · ${homeStanding.points}pts · ${homeStanding.form || '—'}`)
+          )
+        ),
+        e('div', { style: { fontSize: 16, color: T.textMuted, fontWeight: 700, padding: '0 4px' } }, 'vs'),
+        e('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', textAlign: 'right' } },
+          e('div', null,
+            e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em', marginBottom: 2 } }, '✈ FORA'),
+            e('div', { style: { fontSize: 14, color: T.textPrimary, fontWeight: 700 } }, game.awayTeamShort || game.awayTeam),
+            awayStanding && e('div', { style: { fontSize: 10, color: T.textDim, marginTop: 2 } }, `${awayStanding.position}º · ${awayStanding.points}pts · ${awayStanding.form || '—'}`)
+          ),
+          game.awayCrest && e('img', { src: game.awayCrest, alt: '', style: { width: 32, height: 32, objectFit: 'contain' }, onError: ev => ev.target.style.display = 'none' })
+        )
+      ),
+
+      // PICK display (se analisado)
+      analysis && pick && !hasError && e('div', {
+        style: {
+          marginTop: 14, padding: 12,
+          background: `linear-gradient(135deg, ${T.primary}10, ${T.bg})`,
+          border: `1px solid ${T.primary}40`,
+          borderRadius: 6,
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12
+        }
+      },
+        e('div', null,
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '🎯 VENCEDOR'),
+          e('div', { style: { fontSize: 14, fontWeight: 800, color: winnerFromAI === 'TOSS_UP' ? T.warn : T.primary, marginBottom: 4 } }, winnerLabel || '—'),
+          e(ConfidenceBar, { value: pick.winner_confidence })
+        ),
+        e('div', null,
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '⚽ TOTAL 2.5'),
+          e('div', { style: { fontSize: 14, fontWeight: 800, color: totalPick === 'TOSS_UP' ? T.warn : T.primary, marginBottom: 4 } },
+            totalPick === 'OVER' ? 'OVER' : totalPick === 'UNDER' ? 'UNDER' : totalPick === 'TOSS_UP' ? 'TOSS-UP' : '—'
+          ),
+          e(ConfidenceBar, { value: pick.total_confidence })
+        ),
+        pick.predicted_score && e('div', { style: { gridColumn: '1 / -1', fontSize: 11, color: T.textMuted, textAlign: 'center', paddingTop: 8, borderTop: `1px solid ${T.primary}30` } },
+          'Resultado provável: ', e('span', { style: { color: T.primaryLight, fontWeight: 700 } }, pick.predicted_score)
+        )
+      ),
+
+      // CTA
+      !analysis && e('div', { style: { marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+        e('div', { style: { fontSize: 10, color: T.textDim } }, expanded ? 'Clica em ANALISAR para gerar pick' : 'Clica para expandir'),
+        analyzing ? e('span', { className: 'spinner' }) : !expanded && e('span', { style: { fontSize: 10, color: T.primary } }, '▾ EXPANDIR')
+      )
+    ),
+
+    // Expanded
+    expanded && e('div', { style: { padding: 16, background: T.bg } },
+      !analysis && !analyzing && e(Button, {
+        onClick: analyze, variant: 'primary', size: 'md', full: true
+      }, '🤖 ANALISAR COM IA →'),
+
+      analyzing && e('div', { style: { textAlign: 'center', padding: 24 } },
+        e('span', { className: 'spinner' }),
+        e('div', { style: { fontSize: 11, color: T.textMuted, marginTop: 12, letterSpacing: '0.15em' } }, 'A CARREGAR DADOS + IA...')
+      ),
+
+      error && e('div', { style: { fontSize: 11, color: T.loss, padding: 12, background: T.loss + '15', borderRadius: 4 } }, '⚠ ' + error),
+
+      analysis && e('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+        // AI reasoning
+        pick?.reasoning && e('div', {
+          style: { padding: 12, background: T.primary + '12', borderLeft: `3px solid ${T.primary}`, borderRadius: 4 }
+        },
+          e('div', { style: { fontSize: 9, color: T.primary, fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 } }, '🤖 ANÁLISE CLAUDE'),
+          e('div', { style: { fontSize: 12, color: T.textPrimary, lineHeight: 1.6 } }, pick.reasoning)
+        ),
+
+        pick?.error && e('div', { style: { padding: 10, background: T.warn + '15', borderRadius: 4, fontSize: 11, color: T.warn } },
+          '⚠ IA falhou: ' + pick.error
+        ),
+
+        // Key factors / concerns
+        pick?.key_factors?.length > 0 && e('div', null,
+          e('div', { style: { fontSize: 9, color: T.win, fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 } }, '✓ FATORES-CHAVE'),
+          e('ul', { style: { listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 } },
+            pick.key_factors.map((f, i) => e('li', { key: i, style: { fontSize: 11, color: T.textPrimary, paddingLeft: 12, position: 'relative', lineHeight: 1.5 } },
+              e('span', { style: { position: 'absolute', left: 0, color: T.win } }, '▸'),
+              f
+            ))
+          )
+        ),
+        pick?.concerns?.length > 0 && e('div', null,
+          e('div', { style: { fontSize: 9, color: T.warn, fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 } }, '⚠ PREOCUPAÇÕES'),
+          e('ul', { style: { listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 } },
+            pick.concerns.map((f, i) => e('li', { key: i, style: { fontSize: 11, color: T.textPrimary, paddingLeft: 12, position: 'relative', lineHeight: 1.5 } },
+              e('span', { style: { position: 'absolute', left: 0, color: T.warn } }, '⚠'),
+              f
+            ))
+          )
+        ),
+
+        // Modelo Poisson
+        e('details', null,
+          e('summary', { style: { fontSize: 9, color: T.textMuted, fontWeight: 700, letterSpacing: '0.2em', padding: '6px 0' } },
+            '📊 MODELO POISSON ▾'
+          ),
+          e('div', { style: { padding: 10, background: T.bgPanel, borderRadius: 4, fontSize: 11, color: T.textSecondary, lineHeight: 1.7 } },
+            e('div', null, `Golos esperados: ${game.homeTeamShort || game.homeTeam} ${analysis.modelProbs.lambdaHome.toFixed(2)} - ${analysis.modelProbs.lambdaAway.toFixed(2)} ${game.awayTeamShort || game.awayTeam}`),
+            e('div', null, `P(${game.homeTeamShort || game.homeTeam}): ${fmt.pct(analysis.modelProbs.pHome)}`),
+            e('div', null, `P(empate): ${fmt.pct(analysis.modelProbs.pDraw)}`),
+            e('div', null, `P(${game.awayTeamShort || game.awayTeam}): ${fmt.pct(analysis.modelProbs.pAway)}`),
+            e('div', { style: { marginTop: 6, paddingTop: 6, borderTop: `1px solid ${T.border}80` } }, `P(over 2.5): ${fmt.pct(analysis.modelProbs.pOver)}`),
+            e('div', { style: { marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}80` } }, '🎯 Top 3 resultados mais prováveis:'),
+            ...analysis.topScores.map((s, i) => e('div', { key: i, style: { paddingLeft: 8 } },
+              `${i + 1}. ${s.home}-${s.away} (${fmt.pct(s.prob)})`
+            ))
+          )
+        ),
+
+        // Forma recente
+        (analysis.recentForm.home.length > 0 || analysis.recentForm.away.length > 0) && e('details', null,
+          e('summary', { style: { fontSize: 9, color: T.textMuted, fontWeight: 700, letterSpacing: '0.2em', padding: '6px 0' } },
+            '📈 FORMA RECENTE ▾'
+          ),
+          e('div', { style: { padding: 10, background: T.bgPanel, borderRadius: 4, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
+            ['home', 'away'].map(side => e('div', { key: side },
+              e('div', { style: { fontSize: 10, color: T.textPrimary, fontWeight: 700, marginBottom: 6 } },
+                side === 'home' ? game.homeTeamShort || game.homeTeam : game.awayTeamShort || game.awayTeam
+              ),
+              analysis.recentForm[side].length === 0 ? e('div', { style: { fontSize: 10, color: T.textDim } }, 'sem dados') :
+              e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                analysis.recentForm[side].slice(0, 5).map((g, i) => e('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: T.textSecondary } },
+                  e(FormBadge, { result: g.result }),
+                  e('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `${g.isHome ? 'vs' : '@'} ${g.opponent}`),
+                  e('span', { style: { color: T.textMuted, fontWeight: 700 } }, `${g.myScore}-${g.oppScore}`)
+                ))
+              )
+            ))
+          )
+        ),
+
+        // H2H
+        analysis.h2h.length > 0 && e('details', null,
+          e('summary', { style: { fontSize: 9, color: T.textMuted, fontWeight: 700, letterSpacing: '0.2em', padding: '6px 0' } },
+            '🆚 HEAD-TO-HEAD ▾'
+          ),
+          e('div', { style: { padding: 10, background: T.bgPanel, borderRadius: 4, fontSize: 11, color: T.textSecondary, display: 'flex', flexDirection: 'column', gap: 4 } },
+            analysis.h2h.slice(0, 5).map((m, i) => e('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', gap: 8 } },
+              e('span', null, `${fmt.shortDate(m.utcDate)} · ${m.homeTeam} ${m.homeScore != null ? m.homeScore : '?'}-${m.awayScore != null ? m.awayScore : '?'} ${m.awayTeam}`),
+              m.competition && e('span', { style: { color: T.textDim, fontSize: 9 } }, m.competition)
+            ))
+          )
+        ),
+
+        // Notícias relevantes
+        analysis.relevantNews.length > 0 && e('details', null,
+          e('summary', { style: { fontSize: 9, color: T.textMuted, fontWeight: 700, letterSpacing: '0.2em', padding: '6px 0' } },
+            `📰 NOTÍCIAS RELEVANTES (${analysis.relevantNews.length}) ▾`
+          ),
+          e('div', { style: { padding: 10, background: T.bgPanel, borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' } },
+            analysis.relevantNews.map((n, i) => e('a', {
+              key: i, href: n.link, target: '_blank', rel: 'noopener',
+              style: { textDecoration: 'none', display: 'block', padding: 8, background: T.bg, borderLeft: `2px solid ${n.sourceColor}`, borderRadius: 3 }
+            },
+              e('div', { style: { fontSize: 11, color: T.textPrimary, fontWeight: 700, marginBottom: 3 } }, n.title),
+              n.description && e('div', { style: { fontSize: 10, color: T.textMuted, lineHeight: 1.4 } }, n.description),
+              e('div', { style: { fontSize: 9, color: T.textDim, marginTop: 4 } }, `${n.source} · ${fmt.date(n.pubDate)}`)
+            ))
+          )
+        ),
+
+        // Re-analisar
+        e(Button, { onClick: analyze, variant: 'ghost', size: 'sm' }, '↻ RE-ANALISAR')
+      )
+    )
+  );
+}
+
+
+// =============================================================
+// SETTINGS PANEL
+// =============================================================
+function SettingsPanel({ open, onClose, onSaved }) {
+  const [keys, setKeys] = useState(() => loadKeys());
+  const [show, setShow] = useState({});
+  const [saved, setSaved] = useState('');
+
+  if (!open) return null;
+
+  const save = () => {
+    saveKeys(keys);
+    refreshKeys();
+    setSaved('✓ Guardado');
+    setTimeout(() => setSaved(''), 2000);
+    onSaved && onSaved();
+  };
+
+  const KeyField = ({ name, label, placeholder, hint, link }) => e('div', { style: { marginBottom: 16 } },
+    e('div', { style: { fontSize: 9, letterSpacing: '0.15em', color: T.textMuted, marginBottom: 4, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+      e('span', null, label),
+      e('button', {
+        onClick: () => setShow(s => ({ ...s, [name]: !s[name] })),
+        style: { background: 'transparent', border: 'none', color: T.textMuted, fontSize: 9, cursor: 'pointer' }
+      }, show[name] ? '👁 esconder' : '👁 ver')
+    ),
+    e('input', {
+      type: show[name] ? 'text' : 'password',
+      value: keys[name] || '',
+      onChange: ev => setKeys(s => ({ ...s, [name]: ev.target.value })),
+      placeholder,
+      style: { width: '100%', background: T.bg, border: `1px solid ${T.border}`, color: T.textPrimary, padding: '10px 12px', fontSize: 12, fontFamily: 'inherit', borderRadius: 4 }
+    }),
+    hint && e('div', { style: { fontSize: 9, color: T.textDim, marginTop: 4, lineHeight: 1.4 } },
+      hint, link && [' ', e('a', { key: 'l', href: link, target: '_blank', style: { color: T.primaryLight } }, link)]
+    )
+  );
+
+  return e('div', {
+    onClick: onClose,
+    style: { position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 20, overflowY: 'auto' }
+  },
+    e('div', {
+      onClick: ev => ev.stopPropagation(),
+      style: { background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 8, maxWidth: 540, width: '100%', padding: 24, marginTop: 40, marginBottom: 40, animation: 'fadeUp .3s ease' }
+    },
+      e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+        e('div', null,
+          e('div', { style: { fontSize: 9, letterSpacing: '0.3em', color: T.primary, fontWeight: 700 } }, 'CONFIG // ⚙'),
+          e('div', { style: { fontSize: 18, color: T.textPrimary, fontWeight: 700, marginTop: 4 } }, 'Definições')
+        ),
+        e('button', { onClick: onClose, style: { background: 'transparent', border: 'none', color: T.textMuted, fontSize: 22, cursor: 'pointer', padding: 4 } }, '×')
+      ),
+
+      e(SectionLabel, { color: 'primary' }, 'API_KEYS (ambas grátis)'),
+
+      e(KeyField, {
+        name: 'footballdata',
+        label: 'FOOTBALL_DATA_KEY (obrigatória)',
+        placeholder: 'token API',
+        hint: 'GRÁTIS! 10 calls/min. Cobre Premier League completa. Cria em',
+        link: 'https://football-data.org/client/register'
+      }),
+
+      e(KeyField, {
+        name: 'anthropic',
+        label: 'ANTHROPIC_API_KEY (obrigatória)',
+        placeholder: 'sk-ant-...',
+        hint: 'Para análise de IA. Cria em',
+        link: 'https://console.anthropic.com'
+      }),
+
+      e('div', { style: { marginTop: 24, display: 'flex', gap: 10, alignItems: 'center' } },
+        e(Button, { onClick: save, variant: 'primary', size: 'lg' }, 'GUARDAR'),
+        e(Button, { onClick: onClose, variant: 'ghost' }, 'FECHAR'),
+        saved && e('span', { style: { fontSize: 11, color: T.win } }, saved)
+      ),
+
+      e('div', { style: { marginTop: 24, padding: 12, background: T.bg, borderRadius: 4, fontSize: 10, color: T.textMuted, lineHeight: 1.6 } },
+        '⚠ As tuas API keys ficam APENAS no localStorage do browser. Não são enviadas para nenhum servidor além das próprias APIs (Anthropic, football-data).'
+      )
+    )
+  );
+}
+
+// =============================================================
+// PÁGINA PRINCIPAL: PICKS
+// =============================================================
+function PicksPage() {
+  const [games, setGames] = useState([]);
+  const [standings, setStandings] = useState([]);
+  const [news, setNews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [warnings, setWarnings] = useState([]);
+  const [dateRange, setDateRange] = useState('week'); // today | tomorrow | week
+  const [newsLastLoad, setNewsLastLoad] = useState(null);
+
+  const leagueAvgGoals = useMemo(() => {
+    if (!standings || standings.length === 0) return 1.4;
+    const totalGoals = standings.reduce((s, t) => s + t.goalsFor, 0);
+    const totalMatches = standings.reduce((s, t) => s + t.played, 0) / 2;
+    return totalMatches > 0 ? (totalGoals / totalMatches / 2) : 1.4;
+  }, [standings]);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    setWarnings([]);
+    const w = [];
+
+    try {
+      if (!KEYS.footballdata) {
+        throw new Error("FOOTBALL_DATA_KEY não configurada. Vai a ⚙ e adiciona uma chave grátis (regista email em football-data.org).");
+      }
+
+      const dateFrom = dateRange === 'today' ? todayISO() :
+                       dateRange === 'tomorrow' ? dateOffsetISO(1) : todayISO();
+      const dateTo = dateRange === 'today' ? todayISO() :
+                     dateRange === 'tomorrow' ? dateOffsetISO(1) : dateOffsetISO(7);
+
+      const [fixtures, standingsData] = await Promise.all([
+        fdMatches(dateFrom, dateTo).catch(err => { w.push(`Fixtures: ${err.message}`); return []; }),
+        fdStandings().catch(err => { w.push(`Standings: ${err.message}`); return []; }),
+      ]);
+
+      setGames(fixtures || []);
+      setStandings(standingsData || []);
+      if (!fixtures || fixtures.length === 0) {
+        w.push(`Sem jogos para ${dateRange === 'today' ? 'hoje' : dateRange === 'tomorrow' ? 'amanhã' : 'esta semana'} na Premier League`);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setWarnings(w);
+    }
+  };
+
+  const loadNewsData = async () => {
+    setNewsLoading(true);
+    try {
+      const items = await fetchAllNews();
+      setNews(items);
+      setNewsLastLoad(new Date());
+    } catch (e) { console.warn(e); }
+    setNewsLoading(false);
+  };
+
+  // Auto-load ao montar e quando muda range
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange]);
+
+  useEffect(() => {
+    loadNewsData();
+  }, []);
+
+  const onGameAnalyzed = (game, result) => {
+    const allPicks = loadPicks();
+    const entry = {
+      id: Date.now() + Math.random(),
+      gameId: game.id,
+      created_at: new Date().toISOString(),
+      utcDate: game.utcDate,
+      matchday: game.matchday,
+      homeTeam: game.homeTeam,
+      homeTeamShort: game.homeTeamShort,
+      awayTeam: game.awayTeam,
+      awayTeamShort: game.awayTeamShort,
+      winnerPick: result.aiPick?.winner_pick,
+      winnerConfidence: result.aiPick?.winner_confidence,
+      totalPick: result.aiPick?.total_pick,
+      totalConfidence: result.aiPick?.total_confidence,
+      predictedScore: result.aiPick?.predicted_score,
+      reasoning: result.aiPick?.reasoning,
+      result: 'pending',
+    };
+    // Substitui se já existe
+    const filtered = allPicks.filter(p => p.gameId !== game.id);
+    filtered.unshift(entry);
+    savePicks(filtered.slice(0, 200));
+  };
+
+  // Group games by day
+  const gamesByDay = useMemo(() => {
+    const groups = {};
+    games.forEach(g => {
+      const day = g.utcDate.slice(0, 10);
+      if (!groups[day]) groups[day] = [];
+      groups[day].push(g);
+    });
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [games]);
+
+  return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+    // Top header
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 } },
+      e('div', null,
+        e('div', { style: { fontSize: 10, letterSpacing: '0.3em', color: T.primary, fontWeight: 700 } }, '⚽ PREMIER LEAGUE // PICKS'),
+        e('div', { style: { fontSize: 24, color: T.textPrimary, fontWeight: 800, marginTop: 4 } }, 'Próximos jogos')
+      ),
+      e('div', { style: { display: 'flex', gap: 6 } },
+        ['today', 'tomorrow', 'week'].map(r => e('button', {
+          key: r,
+          onClick: () => setDateRange(r),
+          style: {
+            padding: '6px 12px', fontSize: 10, letterSpacing: '0.15em', fontWeight: 700,
+            background: dateRange === r ? T.primary + '20' : 'transparent',
+            color: dateRange === r ? T.primary : T.textMuted,
+            border: `1px solid ${dateRange === r ? T.primary + '70' : T.border}`,
+            borderRadius: 4, cursor: 'pointer'
+          }
+        }, r === 'today' ? 'HOJE' : r === 'tomorrow' ? 'AMANHÃ' : '7 DIAS'))
+      )
+    ),
+
+    // Status bar
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+      e('div', { style: { fontSize: 10, color: T.textMuted } },
+        loading ? '⏳ a carregar...' :
+          games.length > 0 ? `${games.length} jogo${games.length === 1 ? '' : 's'} encontrado${games.length === 1 ? '' : 's'}` : 'sem jogos'
+      ),
+      e('div', { style: { fontSize: 10, color: T.textMuted, display: 'flex', alignItems: 'center', gap: 8 } },
+        newsLoading ? e('span', { className: 'spinner' }) : null,
+        news.length > 0 && `📰 ${news.length} notícias`,
+        newsLastLoad && e('span', null, `· ${newsLastLoad.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}`),
+        e(Button, { onClick: () => { loadData(); loadNewsData(); }, variant: 'ghost', size: 'sm' }, '↻')
+      )
+    ),
+
+    // Warnings
+    warnings.length > 0 && e('div', { style: { padding: 10, background: T.warn + '15', borderRadius: 4, border: `1px solid ${T.warn}40` } },
+      warnings.map((w, i) => e('div', { key: i, style: { fontSize: 10, color: T.warn, lineHeight: 1.5 } }, '⚠ ' + w))
+    ),
+
+    error && e(Card, { accent: T.loss + '60', style: { background: T.loss + '08' } },
+      e('div', { style: { fontSize: 9, color: T.loss, fontWeight: 700, letterSpacing: '0.25em', marginBottom: 6 } }, 'ERRO'),
+      e('div', { style: { fontSize: 12, color: T.loss } }, error)
+    ),
+
+    !KEYS.anthropic && !error && e('div', { style: { padding: 14, background: T.warn + '12', border: `1px solid ${T.warn}40`, borderRadius: 6 } },
+      e('div', { style: { fontSize: 11, color: T.warn, fontWeight: 700, marginBottom: 4 } }, '⚠ ANTHROPIC_API_KEY em falta'),
+      e('div', { style: { fontSize: 11, color: T.textPrimary } }, 'Sem ela, os jogos mostram apenas o modelo matemático. Configura em ⚙.')
+    ),
+
+    // Loading
+    loading && e('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+      [1, 2, 3].map(i => e('div', { key: i, style: { height: 100, background: T.bgPanel, borderRadius: 8, animation: 'pulse 1.5s ease-in-out infinite', opacity: 0.5 } }))
+    ),
+
+    // Lista de jogos agrupada por dia
+    !loading && gamesByDay.length > 0 && gamesByDay.map(([day, gms]) => e('div', { key: day, style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' } },
+        e('div', { style: { fontSize: 10, letterSpacing: '0.3em', color: T.secondaryLight, fontWeight: 700 } }, fmt.dayLabel(day)),
+        e('div', { style: { flex: 1, height: 1, background: T.border } }),
+        e('div', { style: { fontSize: 9, color: T.textDim } }, `${gms.length} jogo${gms.length === 1 ? '' : 's'}`)
+      ),
+      gms.map(game => e(GameCard, {
+        key: game.id,
+        game,
+        allNews: news,
+        standings,
+        leagueAvgGoals,
+        onAnalyzed: onGameAnalyzed
+      }))
+    )),
+
+    // Empty
+    !loading && games.length === 0 && !error && e(Card, { padding: 32, style: { textAlign: 'center' } },
+      e('div', { style: { fontSize: 36, marginBottom: 12 } }, '⚽'),
+      e('div', { style: { fontSize: 13, color: T.textPrimary, fontWeight: 700, marginBottom: 6 } }, `Sem jogos ${dateRange === 'today' ? 'hoje' : dateRange === 'tomorrow' ? 'amanhã' : 'esta semana'}`),
+      e('div', { style: { fontSize: 11, color: T.textMuted } }, 'Tenta outro intervalo de datas.')
+    )
+  );
+}
+
+
+// =============================================================
+// AUTO-SETTLE — busca resultados e marca picks pendentes
+// =============================================================
+
+// Determina se o pick acertou ou não, baseado no resultado real
+function evaluatePick(pick, finalScore) {
+  if (finalScore.homeScore == null || finalScore.awayScore == null) return null;
+  const h = finalScore.homeScore;
+  const a = finalScore.awayScore;
+  const totalGoals = h + a;
+
+  // Vencedor real
+  let realWinner;
+  if (h > a) realWinner = 'HOME';
+  else if (h < a) realWinner = 'AWAY';
+  else realWinner = 'DRAW';
+
+  // Avaliar pick do vencedor
+  let winnerCorrect = null;
+  if (pick.winnerPick === 'TOSS_UP') {
+    winnerCorrect = null; // toss-up não conta nem como acerto nem erro
+  } else {
+    winnerCorrect = pick.winnerPick === realWinner;
+  }
+
+  // Avaliar pick do total
+  let totalCorrect = null;
+  if (pick.totalPick === 'TOSS_UP') {
+    totalCorrect = null;
+  } else if (pick.totalPick === 'OVER') {
+    totalCorrect = totalGoals > 2.5;
+  } else if (pick.totalPick === 'UNDER') {
+    totalCorrect = totalGoals < 2.5;
+  }
+
+  // Avaliar score exato (bonus)
+  let scoreExact = false;
+  if (pick.predictedScore) {
+    const m = pick.predictedScore.match(/(\d+)\s*-\s*(\d+)/);
+    if (m && parseInt(m[1]) === h && parseInt(m[2]) === a) scoreExact = true;
+  }
+
+  // Resultado global:
+  // - correct: vencedor E total acertaram (ou um acertou e outro foi TOSS-UP)
+  // - partial: um acertou e outro falhou
+  // - wrong: ambos falharam
+  // - tossup: ambos foram TOSS-UP
+  let overall;
+  if (winnerCorrect === null && totalCorrect === null) {
+    overall = 'tossup';
+  } else if ((winnerCorrect === true || winnerCorrect === null) && (totalCorrect === true || totalCorrect === null)) {
+    overall = 'correct';
+  } else if (winnerCorrect === false && totalCorrect === false) {
+    overall = 'wrong';
+  } else {
+    overall = 'partial';
+  }
+
+  return {
+    realScore: `${h}-${a}`,
+    realWinner,
+    totalGoals,
+    winnerCorrect,
+    totalCorrect,
+    scoreExact,
+    overall,
+  };
+}
+
+// Procura resultados finais para todos os picks pendentes
+async function autoSettlePending(picks) {
+  if (!KEYS.footballdata) throw new Error("FOOTBALL_DATA_KEY em falta");
+  const pending = picks.filter(p => p.result === 'pending');
+  if (pending.length === 0) return { updated: 0, settled: 0, errors: [] };
+
+  // Encontrar range de datas
+  const dates = pending.map(p => new Date(p.utcDate)).filter(d => !isNaN(d));
+  if (dates.length === 0) return { updated: 0, settled: 0, errors: ['datas inválidas'] };
+  const minDate = new Date(Math.min(...dates));
+  const maxDate = new Date(Math.max(...dates));
+
+  // Estende range para garantir que apanha jogos terminados (jogos podem terminar dia seguinte se for à noite)
+  const dateFrom = minDate.toISOString().slice(0, 10);
+  const maxPlus = new Date(maxDate.getTime() + 86400000);
+  const dateTo = maxPlus.toISOString().slice(0, 10);
+
+  let finishedMatches = [];
+  const errors = [];
+  try {
+    finishedMatches = await fdFinishedMatches(dateFrom, dateTo);
+  } catch (err) {
+    errors.push(`Fetch: ${err.message}`);
+    return { updated: 0, settled: 0, errors };
+  }
+
+  // Mapa de gameId → resultado
+  const resultMap = {};
+  finishedMatches.forEach(m => {
+    if (m.homeScore != null && m.awayScore != null) {
+      resultMap[m.id] = m;
+    }
+  });
+
+  // Atualizar picks
+  let settled = 0;
+  const updated = picks.map(p => {
+    if (p.result !== 'pending') return p;
+    const res = resultMap[p.gameId];
+    if (!res) return p;
+    const evalResult = evaluatePick(p, res);
+    if (!evalResult) return p;
+    settled++;
+    return {
+      ...p,
+      result: evalResult.overall,
+      realScore: evalResult.realScore,
+      realWinner: evalResult.realWinner,
+      totalGoals: evalResult.totalGoals,
+      winnerCorrect: evalResult.winnerCorrect,
+      totalCorrect: evalResult.totalCorrect,
+      scoreExact: evalResult.scoreExact,
+      settled_at: new Date().toISOString(),
+    };
+  });
+
+  return { updated: updated.length, settled, errors, picks: updated };
+}
+
+// Calcula stats agregados de accuracy
+function computeAccuracyStats(picks) {
+  const settled = picks.filter(p => p.result !== 'pending');
+
+  const winnerSettled = settled.filter(p => p.winnerCorrect != null);
+  const winnerCorrect = winnerSettled.filter(p => p.winnerCorrect === true).length;
+  const winnerAccuracy = winnerSettled.length > 0 ? winnerCorrect / winnerSettled.length : 0;
+
+  const totalSettled = settled.filter(p => p.totalCorrect != null);
+  const totalCorrect = totalSettled.filter(p => p.totalCorrect === true).length;
+  const totalAccuracy = totalSettled.length > 0 ? totalCorrect / totalSettled.length : 0;
+
+  const exactScore = settled.filter(p => p.scoreExact === true).length;
+
+  // Breakdown por confiança
+  const byConfidence = { high: { c: 0, t: 0 }, mid: { c: 0, t: 0 }, low: { c: 0, t: 0 } };
+  winnerSettled.forEach(p => {
+    const conf = p.winnerConfidence || 0;
+    const bucket = conf >= 0.65 ? 'high' : conf >= 0.55 ? 'mid' : 'low';
+    byConfidence[bucket].t++;
+    if (p.winnerCorrect) byConfidence[bucket].c++;
+  });
+
+  // Breakdown por tipo de pick
+  const byPickType = {};
+  ['HOME', 'AWAY', 'DRAW'].forEach(t => {
+    const ofType = winnerSettled.filter(p => p.winnerPick === t);
+    byPickType[t] = {
+      total: ofType.length,
+      correct: ofType.filter(p => p.winnerCorrect).length,
+      accuracy: ofType.length > 0 ? ofType.filter(p => p.winnerCorrect).length / ofType.length : 0,
+    };
+  });
+
+  // Distribuição global (para donut)
+  const distribution = {
+    correct: picks.filter(p => p.result === 'correct').length,
+    partial: picks.filter(p => p.result === 'partial').length,
+    wrong: picks.filter(p => p.result === 'wrong').length,
+    tossup: picks.filter(p => p.result === 'tossup').length,
+    pending: picks.filter(p => p.result === 'pending').length,
+  };
+
+  return {
+    total: picks.length,
+    pending: picks.filter(p => p.result === 'pending').length,
+    settled: settled.length,
+    winnerAccuracy,
+    winnerCorrect,
+    winnerTotal: winnerSettled.length,
+    totalAccuracy,
+    totalCorrect,
+    totalTotal: totalSettled.length,
+    exactScore,
+    byConfidence,
+    byPickType,
+    distribution,
+  };
+}
+
+// =============================================================
+// PÁGINA: RESULTADOS — análise de accuracy
+// =============================================================
+function ResultsPage() {
+  const [picks, setPicks] = useState(() => loadPicks());
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [lastAutoMsg, setLastAutoMsg] = useState(null);
+  const [filter, setFilter] = useState('all');
+
+  const refresh = () => setPicks(loadPicks());
+
+  const stats = useMemo(() => computeAccuracyStats(picks), [picks]);
+
+  // Auto-settle ao montar a página (1x)
+  useEffect(() => {
+    runAutoSettle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const runAutoSettle = async () => {
+    if (autoLoading) return;
+    if (!KEYS.footballdata) {
+      setLastAutoMsg({ ok: false, text: 'Configura FOOTBALL_DATA_KEY em ⚙' });
+      return;
+    }
+    setAutoLoading(true);
+    setLastAutoMsg(null);
+    try {
+      const all = loadPicks();
+      const result = await autoSettlePending(all);
+      if (result.picks) {
+        savePicks(result.picks);
+        refresh();
+      }
+      if (result.settled > 0) {
+        setLastAutoMsg({ ok: true, text: `✓ ${result.settled} jogo${result.settled === 1 ? '' : 's'} resolvido${result.settled === 1 ? '' : 's'}` });
+      } else if (result.errors.length > 0) {
+        setLastAutoMsg({ ok: false, text: '⚠ ' + result.errors.join('; ') });
+      } else {
+        setLastAutoMsg({ ok: true, text: 'Nenhum jogo novo terminado' });
+      }
+    } catch (err) {
+      setLastAutoMsg({ ok: false, text: err.message });
+    } finally {
+      setAutoLoading(false);
+      setTimeout(() => setLastAutoMsg(null), 4000);
+    }
+  };
+
+  const exportCSV = () => {
+    const headers = ['data','jornada','casa','fora','pick_vencedor','conf_vencedor','pick_total','conf_total','score_previsto','score_real','vencedor_real','vencedor_acerto','total_acerto','score_exato','resultado','raciocinio'];
+    const rows = picks.map(p => [
+      p.utcDate, p.matchday || '',
+      p.homeTeamShort || p.homeTeam,
+      p.awayTeamShort || p.awayTeam,
+      p.winnerPick || '',
+      p.winnerConfidence != null ? (p.winnerConfidence * 100).toFixed(1) + '%' : '',
+      p.totalPick || '',
+      p.totalConfidence != null ? (p.totalConfidence * 100).toFixed(1) + '%' : '',
+      p.predictedScore || '',
+      p.realScore || '',
+      p.realWinner || '',
+      p.winnerCorrect == null ? '' : (p.winnerCorrect ? 'sim' : 'não'),
+      p.totalCorrect == null ? '' : (p.totalCorrect ? 'sim' : 'não'),
+      p.scoreExact ? 'sim' : '',
+      p.result,
+      (p.reasoning || '').replace(/\n/g, ' ').replace(/"/g, "'"),
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v)}"`).join(',')).join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `premier-picks-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportJSON = () => {
+    const data = JSON.stringify({ picks, exported_at: new Date().toISOString() }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `premier-picks-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Filtragem dos picks resolvidos
+  const settled = picks.filter(p => p.result !== 'pending');
+  const filteredPicks = settled.filter(p => {
+    if (filter === 'all') return true;
+    if (filter === 'correct') return p.result === 'correct';
+    if (filter === 'wrong') return p.result === 'wrong';
+    if (filter === 'partial') return p.result === 'partial';
+    return true;
+  }).sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate));
+
+  return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+    // Header
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 } },
+      e('div', null,
+        e('div', { style: { fontSize: 10, letterSpacing: '0.3em', color: T.primary, fontWeight: 700 } }, 'ANÁLISE // ACCURACY'),
+        e('div', { style: { fontSize: 24, color: T.textPrimary, fontWeight: 800, marginTop: 4 } }, 'Resultados')
+      ),
+      e('div', { style: { display: 'flex', gap: 6 } },
+        e(Button, { onClick: runAutoSettle, variant: 'primary', size: 'sm', disabled: autoLoading },
+          autoLoading ? '⏳ A buscar...' : '↻ ATUALIZAR'
+        )
+      )
+    ),
+
+    lastAutoMsg && e('div', { style: { padding: 10, background: lastAutoMsg.ok ? T.win + '15' : T.warn + '15', border: `1px solid ${lastAutoMsg.ok ? T.win : T.warn}40`, borderRadius: 4, fontSize: 11, color: lastAutoMsg.ok ? T.win : T.warn } },
+      lastAutoMsg.text
+    ),
+
+    picks.length === 0 ? e(Card, { padding: 32, style: { textAlign: 'center' } },
+      e('div', { style: { fontSize: 36, marginBottom: 8 } }, '📊'),
+      e('div', { style: { fontSize: 13, color: T.textPrimary, fontWeight: 700, marginBottom: 6 } }, 'Sem dados ainda'),
+      e('div', { style: { fontSize: 11, color: T.textMuted } }, 'Vai a Picks → analisa jogos. Os resultados aparecerão aqui automaticamente quando os jogos terminarem.')
+    ) : e('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+
+      // METRIC OVERVIEW
+      e(SectionLabel, { color: 'primary' }, 'TAXA DE ACERTO'),
+      e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 } },
+        // Vencedor accuracy
+        e(Card, { padding: 14, glow: stats.winnerAccuracy >= 0.55 },
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '🎯 VENCEDOR'),
+          e('div', { style: { fontSize: 28, fontWeight: 800, color: stats.winnerAccuracy >= 0.55 ? T.win : stats.winnerAccuracy >= 0.45 ? T.warn : T.loss, lineHeight: 1 } },
+            stats.winnerTotal > 0 ? fmt.pct(stats.winnerAccuracy) : '—'
+          ),
+          e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 4 } }, `${stats.winnerCorrect}/${stats.winnerTotal} acertos`)
+        ),
+        // Total accuracy
+        e(Card, { padding: 14, glow: stats.totalAccuracy >= 0.55 },
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '⚽ OVER/UNDER 2.5'),
+          e('div', { style: { fontSize: 28, fontWeight: 800, color: stats.totalAccuracy >= 0.55 ? T.win : stats.totalAccuracy >= 0.45 ? T.warn : T.loss, lineHeight: 1 } },
+            stats.totalTotal > 0 ? fmt.pct(stats.totalAccuracy) : '—'
+          ),
+          e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 4 } }, `${stats.totalCorrect}/${stats.totalTotal} acertos`)
+        ),
+        e(Card, { padding: 14 },
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '📍 SCORE EXATO'),
+          e('div', { style: { fontSize: 28, fontWeight: 800, color: T.secondaryLight, lineHeight: 1 } }, stats.exactScore),
+          e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 4 } }, 'resultados exatos')
+        ),
+        e(Card, { padding: 14 },
+          e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, '⏱ POR RESOLVER'),
+          e('div', { style: { fontSize: 28, fontWeight: 800, color: T.warn, lineHeight: 1 } }, stats.pending),
+          e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 4 } }, `de ${stats.total} análises`)
+        )
+      ),
+
+      // GRÁFICO 1: DISTRIBUIÇÃO (donut)
+      e(Card, { padding: 16 },
+        e(SectionLabel, { color: 'primary' }, '📊 DISTRIBUIÇÃO GLOBAL'),
+        e(DistributionDonut, { counts: stats.distribution })
+      ),
+
+      // GRÁFICO 2: TIMELINE
+      stats.winnerTotal >= 2 && e(Card, { padding: 16 },
+        e(SectionLabel, { color: 'primary' }, '📈 EVOLUÇÃO DA TAXA DE ACERTO (VENCEDOR)'),
+        e('div', { style: { fontSize: 10, color: T.textMuted, marginBottom: 8, lineHeight: 1.5 } },
+          'Accuracy cumulativa ao longo dos jogos resolvidos. Linha tracejada amarela = 50% (aleatório).'
+        ),
+        e(AccuracyTimeline, { picks, type: 'winner' })
+      ),
+
+      stats.totalTotal >= 2 && e(Card, { padding: 16 },
+        e(SectionLabel, { color: 'primary' }, '📈 EVOLUÇÃO DA TAXA DE ACERTO (OVER/UNDER 2.5)'),
+        e(AccuracyTimeline, { picks, type: 'total' })
+      ),
+
+      // GRÁFICO 3: BARRAS POR CONFIANÇA
+      stats.winnerTotal > 0 && e(Card, { padding: 16 },
+        e(SectionLabel, { color: 'primary' }, '🎚 ACERTO POR NÍVEL DE CONFIANÇA'),
+        e('div', { style: { fontSize: 10, color: T.textMuted, marginBottom: 8, lineHeight: 1.5 } },
+          'Se a IA está bem calibrada, alta confiança deve ter mais acertos que baixa.'
+        ),
+        e(ConfidenceBars, { byConfidence: stats.byConfidence })
+      ),
+
+      // BREAKDOWN POR CONFIANÇA
+      stats.winnerTotal > 0 && e('div', null,
+        e(SectionLabel, null, 'ACERTO POR NÍVEL DE CONFIANÇA'),
+        e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 } },
+          [
+            { key: 'high', label: 'ALTA (≥65%)', color: T.win },
+            { key: 'mid', label: 'MÉDIA (55-65%)', color: T.warn },
+            { key: 'low', label: 'BAIXA (<55%)', color: T.textMuted },
+          ].map(b => {
+            const data = stats.byConfidence[b.key];
+            const acc = data.t > 0 ? data.c / data.t : 0;
+            return e(Card, { key: b.key, padding: 12 },
+              e('div', { style: { fontSize: 9, color: b.color, letterSpacing: '0.2em', marginBottom: 4 } }, b.label),
+              e('div', { style: { fontSize: 22, fontWeight: 800, color: T.textPrimary } }, data.t > 0 ? fmt.pct(acc) : '—'),
+              e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 2 } }, `${data.c}/${data.t}`)
+            );
+          })
+        )
+      ),
+
+      // BREAKDOWN POR TIPO DE PICK
+      stats.winnerTotal > 0 && e('div', null,
+        e(SectionLabel, null, 'ACERTO POR TIPO DE PICK'),
+        e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 } },
+          ['HOME', 'DRAW', 'AWAY'].map(t => {
+            const d = stats.byPickType[t];
+            return e(Card, { key: t, padding: 12 },
+              e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } },
+                t === 'HOME' ? '🏠 CASA' : t === 'AWAY' ? '✈ FORA' : '⚖ EMPATE'
+              ),
+              e('div', { style: { fontSize: 20, fontWeight: 800, color: d.accuracy >= 0.55 ? T.win : T.textPrimary } }, d.total > 0 ? fmt.pct(d.accuracy) : '—'),
+              e('div', { style: { fontSize: 10, color: T.textMuted, marginTop: 2 } }, `${d.correct}/${d.total}`)
+            );
+          })
+        )
+      ),
+
+      // EXPORT BUTTONS
+      e('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+        e(Button, { onClick: exportCSV, variant: 'ghost', size: 'sm', disabled: picks.length === 0 }, '📥 EXPORTAR CSV'),
+        e(Button, { onClick: exportJSON, variant: 'ghost', size: 'sm', disabled: picks.length === 0 }, '📥 EXPORTAR JSON'),
+      ),
+
+      // FILTER
+      settled.length > 0 && e('div', null,
+        e(SectionLabel, null, 'JOGOS RESOLVIDOS'),
+        e('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 } },
+          [
+            { id: 'all', label: 'TODOS' },
+            { id: 'correct', label: '✓ ACERTOS' },
+            { id: 'partial', label: '⚡ PARCIAIS' },
+            { id: 'wrong', label: '✗ FALHAS' },
+          ].map(f => e('button', {
+            key: f.id,
+            onClick: () => setFilter(f.id),
+            style: {
+              padding: '6px 12px', fontSize: 10, letterSpacing: '0.15em', fontWeight: 700,
+              background: filter === f.id ? T.primary + '20' : 'transparent',
+              color: filter === f.id ? T.primary : T.textMuted,
+              border: `1px solid ${filter === f.id ? T.primary + '70' : T.border}`,
+              borderRadius: 4, cursor: 'pointer'
+            }
+          }, f.label))
+        )
+      ),
+
+      // LISTA DE JOGOS RESOLVIDOS
+      filteredPicks.length === 0 && settled.length > 0 ? e(Card, { padding: 20, style: { textAlign: 'center' } },
+        e('div', { style: { fontSize: 11, color: T.textMuted } }, 'Nenhum jogo neste filtro')
+      ) : filteredPicks.map(p => {
+        const winnerLabel = p.winnerPick === 'HOME' ? (p.homeTeamShort || p.homeTeam) :
+          p.winnerPick === 'AWAY' ? (p.awayTeamShort || p.awayTeam) :
+          p.winnerPick === 'DRAW' ? 'EMPATE' : 'TOSS-UP';
+        const realWinnerLabel = p.realWinner === 'HOME' ? (p.homeTeamShort || p.homeTeam) :
+          p.realWinner === 'AWAY' ? (p.awayTeamShort || p.awayTeam) :
+          p.realWinner === 'DRAW' ? 'EMPATE' : '?';
+        const accentColor = p.result === 'correct' ? T.win + '60' :
+          p.result === 'wrong' ? T.loss + '60' :
+          p.result === 'partial' ? T.warn + '60' : T.border;
+        return e(Card, { key: p.id, padding: 14, accent: accentColor },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 10 } },
+            e('div', { style: { flex: 1, minWidth: 200 } },
+              e('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+                e(Badge, {
+                  color: p.result === 'correct' ? 'win' : p.result === 'wrong' ? 'loss' : p.result === 'partial' ? 'warn' : 'gray'
+                }, p.result === 'correct' ? '✓ ACERTO' : p.result === 'wrong' ? '✗ FALHA' : p.result === 'partial' ? '⚡ PARCIAL' : p.result === 'tossup' ? '⚖ TOSS-UP' : '?'),
+                p.matchday && e(Badge, { color: 'secondary' }, `J${p.matchday}`),
+                p.scoreExact && e(Badge, { color: 'primary' }, '🎯 SCORE EXATO'),
+                e('span', { style: { fontSize: 10, color: T.textMuted } }, fmt.shortDate(p.utcDate))
+              ),
+              e('div', { style: { fontSize: 14, color: T.textPrimary, fontWeight: 700 } },
+                `${p.homeTeamShort || p.homeTeam} vs ${p.awayTeamShort || p.awayTeam}`
+              )
+            ),
+            e('div', { style: { fontSize: 18, fontWeight: 800, color: T.textPrimary, padding: '0 4px', minWidth: 60, textAlign: 'right' } }, p.realScore || '—')
+          ),
+          // Tabela de comparação
+          e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: 10, background: T.bg, borderRadius: 4, fontSize: 11 } },
+            // Vencedor
+            e('div', null,
+              e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em', marginBottom: 4 } }, '🎯 VENCEDOR'),
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 2 } },
+                e('span', { style: { color: T.textMuted } }, 'Pick:'),
+                e('span', { style: { color: p.winnerCorrect === true ? T.win : p.winnerCorrect === false ? T.loss : T.textPrimary, fontWeight: 700 } },
+                  `${winnerLabel} (${fmt.pct(p.winnerConfidence)})`
+                )
+              ),
+              e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
+                e('span', { style: { color: T.textMuted } }, 'Real:'),
+                e('span', { style: { color: T.textPrimary, fontWeight: 700 } }, realWinnerLabel)
+              )
+            ),
+            // Total
+            e('div', null,
+              e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em', marginBottom: 4 } }, '⚽ TOTAL'),
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 2 } },
+                e('span', { style: { color: T.textMuted } }, 'Pick:'),
+                e('span', { style: { color: p.totalCorrect === true ? T.win : p.totalCorrect === false ? T.loss : T.textPrimary, fontWeight: 700 } },
+                  `${p.totalPick || '—'} (${fmt.pct(p.totalConfidence)})`
+                )
+              ),
+              e('div', { style: { display: 'flex', justifyContent: 'space-between' } },
+                e('span', { style: { color: T.textMuted } }, 'Real:'),
+                e('span', { style: { color: T.textPrimary, fontWeight: 700 } }, p.totalGoals != null ? `${p.totalGoals} golos (${p.totalGoals > 2.5 ? 'OVER' : 'UNDER'})` : '—')
+              )
+            )
+          ),
+          // Score previsto vs real
+          p.predictedScore && e('div', { style: { marginTop: 8, fontSize: 11, color: T.textMuted, display: 'flex', justifyContent: 'space-between' } },
+            e('span', null, `Score previsto: ${e('span', { style: { color: T.textPrimary, fontWeight: 700 } }, p.predictedScore)}`),
+            e('span', null, `Score real: ${p.realScore || '—'}`)
+          ),
+          p.reasoning && e('details', { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}80` } },
+            e('summary', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em' } }, '💭 RACIOCÍNIO IA ▾'),
+            e('div', { style: { fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.5, fontStyle: 'italic' } }, p.reasoning)
+          )
+        );
+      })
+    )
+  );
+}
+
+// =============================================================
+// PÁGINA: HISTÓRICO
+// =============================================================
+function HistoryPage() {
+  const [picks, setPicks] = useState(() => loadPicks());
+  const [filter, setFilter] = useState('all');
+
+  const refresh = () => setPicks(loadPicks());
+
+  const settle = (id, correct) => {
+    const all = loadPicks();
+    const idx = all.findIndex(p => p.id === id);
+    if (idx === -1) return;
+    all[idx] = { ...all[idx], result: correct ? 'correct' : 'wrong', settled_at: new Date().toISOString() };
+    savePicks(all);
+    refresh();
+  };
+
+  const remove = (id) => {
+    if (!confirm('Apagar pick?')) return;
+    savePicks(loadPicks().filter(p => p.id !== id));
+    refresh();
+  };
+
+  const clearAll = () => {
+    if (!confirm('APAGAR TODOS os picks? Esta ação é irreversível.')) return;
+    savePicks([]);
+    refresh();
+  };
+
+  const filtered = picks.filter(p => filter === 'all' ? true : p.result === filter);
+
+  const settled = picks.filter(p => p.result !== 'pending');
+  const correct = settled.filter(p => p.result === 'correct').length;
+  const accuracy = settled.length > 0 ? correct / settled.length : 0;
+
+  return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 } },
+      e('div', null,
+        e('div', { style: { fontSize: 10, letterSpacing: '0.3em', color: T.primary, fontWeight: 700 } }, 'TRACKING // ACCURACY'),
+        e('div', { style: { fontSize: 24, color: T.textPrimary, fontWeight: 800, marginTop: 4 } }, 'Histórico')
+      ),
+      picks.length > 0 && e(Button, { onClick: clearAll, variant: 'ghost', size: 'sm' }, '🗑 LIMPAR')
+    ),
+
+    picks.length > 0 && e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 } },
+      e(Card, { padding: 12 },
+        e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, 'TOTAL'),
+        e('div', { style: { fontSize: 20, fontWeight: 800, color: T.textPrimary } }, picks.length)
+      ),
+      e(Card, { padding: 12 },
+        e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, 'PENDING'),
+        e('div', { style: { fontSize: 20, fontWeight: 800, color: T.warn } }, picks.filter(p => p.result === 'pending').length)
+      ),
+      e(Card, { padding: 12 },
+        e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, 'CORRECT'),
+        e('div', { style: { fontSize: 20, fontWeight: 800, color: T.win } }, correct)
+      ),
+      e(Card, { padding: 12 },
+        e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.2em', marginBottom: 4 } }, 'ACCURACY'),
+        e('div', { style: { fontSize: 20, fontWeight: 800, color: accuracy >= 0.55 ? T.win : accuracy >= 0.5 ? T.warn : T.loss } }, settled.length > 0 ? fmt.pct(accuracy) : '—')
+      )
+    ),
+
+    e('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+      ['all', 'pending', 'correct', 'wrong'].map(f => e('button', {
+        key: f,
+        onClick: () => setFilter(f),
+        style: {
+          padding: '6px 12px', fontSize: 10, letterSpacing: '0.15em', fontWeight: 700,
+          background: filter === f ? T.primary + '20' : 'transparent',
+          color: filter === f ? T.primary : T.textMuted,
+          border: `1px solid ${filter === f ? T.primary + '70' : T.border}`,
+          borderRadius: 4, cursor: 'pointer'
+        }
+      }, f.toUpperCase()))
+    ),
+
+    filtered.length === 0 ? e(Card, { padding: 32, style: { textAlign: 'center' } },
+      e('div', { style: { fontSize: 36, marginBottom: 8 } }, '🎯'),
+      e('div', { style: { fontSize: 12, color: T.textMuted } }, picks.length === 0 ? 'Sem picks. Analisa jogos para começar.' : 'Sem picks neste filtro.')
+    ) : e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      filtered.map(p => {
+        const winnerLabel = p.winnerPick === 'HOME' ? (p.homeTeamShort || p.homeTeam) :
+          p.winnerPick === 'AWAY' ? (p.awayTeamShort || p.awayTeam) :
+          p.winnerPick === 'DRAW' ? 'EMPATE' : 'TOSS-UP';
+        return e(Card, {
+          key: p.id,
+          padding: 14,
+          accent: p.result === 'correct' ? T.win + '60' : p.result === 'wrong' ? T.loss + '60' : T.warn + '60'
+        },
+          e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 } },
+            e('div', { style: { flex: 1, minWidth: 200 } },
+              e('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+                e(Badge, {
+                  color: p.result === 'correct' ? 'win' : p.result === 'wrong' ? 'loss' : 'warn'
+                }, p.result === 'correct' ? '✓ CORRECT' : p.result === 'wrong' ? '✗ WRONG' : '⏱ PENDING'),
+                p.matchday && e(Badge, { color: 'secondary' }, `J${p.matchday}`),
+                e('span', { style: { fontSize: 10, color: T.textMuted } }, fmt.dateTime(p.utcDate))
+              ),
+              e('div', { style: { fontSize: 14, color: T.textPrimary, fontWeight: 700, marginBottom: 6 } },
+                `${p.homeTeamShort || p.homeTeam} vs ${p.awayTeamShort || p.awayTeam}`
+              ),
+              e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 } },
+                e('div', null,
+                  e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em' } }, '🎯 PICK'),
+                  e('div', { style: { fontSize: 12, color: T.primary, fontWeight: 700 } }, winnerLabel),
+                  e('div', { style: { fontSize: 10, color: T.textMuted } }, fmt.pct(p.winnerConfidence) + ' conf')
+                ),
+                p.totalPick && e('div', null,
+                  e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em' } }, '⚽ TOTAL'),
+                  e('div', { style: { fontSize: 12, color: T.primary, fontWeight: 700 } }, p.totalPick),
+                  e('div', { style: { fontSize: 10, color: T.textMuted } }, fmt.pct(p.totalConfidence) + ' conf')
+                ),
+                p.predictedScore && e('div', null,
+                  e('div', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em' } }, '📍 SCORE'),
+                  e('div', { style: { fontSize: 12, color: T.textPrimary, fontWeight: 700 } }, p.predictedScore)
+                )
+              )
+            ),
+            e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              p.result === 'pending' ? e('div', { style: { display: 'flex', gap: 4 } },
+                e(Button, { onClick: () => settle(p.id, true), variant: 'primary', size: 'sm' }, '✓'),
+                e(Button, { onClick: () => settle(p.id, false), variant: 'ghost', size: 'sm', style: { background: T.loss, color: '#fff' } }, '✗')
+              ) : e(Button, { onClick: () => remove(p.id), variant: 'ghost', size: 'sm' }, '×')
+            )
+          ),
+          p.reasoning && e('details', { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}80` } },
+            e('summary', { style: { fontSize: 9, color: T.textMuted, letterSpacing: '0.15em' } }, '💭 RACIOCÍNIO IA ▾'),
+            e('div', { style: { fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.5, fontStyle: 'italic' } }, p.reasoning)
+          )
+        );
+      })
+    )
+  );
+}
+
+// =============================================================
+// APP PRINCIPAL
+// =============================================================
+function App() {
+  const [activePage, setActivePage] = useState('picks');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [, setRefresh] = useState(0);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  }, []);
+
+  return e('div', { style: { minHeight: '100vh', background: T.bg } },
+    // Background grid
+    e('div', {
+      style: {
+        position: 'fixed', inset: 0, opacity: 0.025, pointerEvents: 'none', zIndex: 0,
+        backgroundImage: `linear-gradient(${T.textPrimary} 1px, transparent 1px), linear-gradient(90deg, ${T.textPrimary} 1px, transparent 1px)`,
+        backgroundSize: '40px 40px'
+      }
+    }),
+
+    // HEADER
+    e('div', {
+      style: {
+        position: 'sticky', top: 0, zIndex: 50,
+        background: 'rgba(10,10,15,0.92)',
+        backdropFilter: 'blur(8px)',
+        borderBottom: `1px solid ${T.border}`,
+      }
+    },
+      e('div', { style: { maxWidth: 1100, margin: '0 auto', padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 } },
+        e('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+          e('div', { style: { fontSize: 26, animation: 'pulse 2s ease-in-out infinite' } }, '⚽'),
+          e('div', null,
+            e('div', { style: { fontSize: 9, letterSpacing: '0.35em', color: T.primary, fontWeight: 700 } }, 'AI // PICKS // PREMIER'),
+            e('div', { style: { fontSize: 16, color: T.textPrimary, fontWeight: 800, marginTop: 2 } },
+              'Premier Picks', e('span', { style: { color: T.primary } }, '_')
+            )
+          )
+        ),
+        e('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
+          e('button', {
+            onClick: () => setActivePage('picks'),
+            style: {
+              background: activePage === 'picks' ? T.primary + '20' : 'transparent',
+              border: `1px solid ${activePage === 'picks' ? T.primary + '60' : 'transparent'}`,
+              color: activePage === 'picks' ? T.primary : T.textMuted,
+              padding: '7px 12px', fontSize: 10, letterSpacing: '0.18em', fontWeight: 700,
+              cursor: 'pointer', borderRadius: 4
+            }
+          }, 'PICKS'),
+          e('button', {
+            onClick: () => setActivePage('results'),
+            style: {
+              background: activePage === 'results' ? T.primary + '20' : 'transparent',
+              border: `1px solid ${activePage === 'results' ? T.primary + '60' : 'transparent'}`,
+              color: activePage === 'results' ? T.primary : T.textMuted,
+              padding: '7px 12px', fontSize: 10, letterSpacing: '0.18em', fontWeight: 700,
+              cursor: 'pointer', borderRadius: 4
+            }
+          }, '📊 RESULTADOS'),
+          e('button', {
+            onClick: () => setActivePage('history'),
+            style: {
+              background: activePage === 'history' ? T.primary + '20' : 'transparent',
+              border: `1px solid ${activePage === 'history' ? T.primary + '60' : 'transparent'}`,
+              color: activePage === 'history' ? T.primary : T.textMuted,
+              padding: '7px 12px', fontSize: 10, letterSpacing: '0.18em', fontWeight: 700,
+              cursor: 'pointer', borderRadius: 4
+            }
+          }, 'HISTÓRICO'),
+          e('button', {
+            onClick: () => setSettingsOpen(true),
+            style: { background: 'transparent', border: `1px solid ${T.border}`, color: T.textMuted, padding: '7px 11px', fontSize: 13, cursor: 'pointer', borderRadius: 4 },
+            title: 'Definições'
+          }, '⚙')
+        )
+      )
+    ),
+
+    // CONTENT
+    e('div', { style: { maxWidth: 1100, margin: '0 auto', padding: '20px 16px', position: 'relative' } },
+      activePage === 'picks' && e(PicksPage),
+      activePage === 'results' && e(ResultsPage),
+      activePage === 'history' && e(HistoryPage)
+    ),
+
+    // FOOTER
+    e('div', { style: { borderTop: `1px solid ${T.border}`, marginTop: 40, padding: '16px', textAlign: 'center', fontSize: 9, color: T.textDim, letterSpacing: '0.15em' } },
+      'PREDIÇÕES PARA ANÁLISE PESSOAL // NÃO É CONSELHO DE APOSTA // SEM GARANTIAS DE LUCRO'
+    ),
+
+    e(SettingsPanel, { open: settingsOpen, onClose: () => setSettingsOpen(false), onSaved: () => setRefresh(r => r + 1) })
+  );
+}
+
+// =============================================================
+// MOUNT
+// =============================================================
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(e(App));
+
+</script>
+</body>
+</html>
